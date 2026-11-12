@@ -1,0 +1,19 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+
+# LibreOffice 临时 profile（render_preview 生成）
+*.lo-profile/
+.lo-profile/
+
+# 运行产物（保留 examples/out 里的示例图，其余忽略）
+*.tmp
+.tmp
+build/
+dist/
+
+# 系统
+Thumbs.db
+.DS_Store
+desktop.ini
