@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+﻿#!/usr/bin/env python
 # -*- coding: utf-8 -*-
 """版式结构校验：直接读 docx 的 XML 断言版式参数，不渲染页面。
 
@@ -35,7 +35,9 @@ from docx.shared import Length, Pt
 from lxml import etree
 
 sys.path.insert(0, str(Path(__file__).parent))
-from journal_layout import SPECS, classify, get_specs  # noqa: E402  与排版脚本共用同一套分类与参数
+from journal_layout import (SPECS, TABLE_STYLE, classify, find_notes_block, get_specs,  # noqa: E402
+                            notes_mode)
+# 与排版脚本共用同一套分类规则、参数表与表格制式
 
 W = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
 Q = lambda t: "{%s}%s" % (W, t)
@@ -162,6 +164,41 @@ def _all_text(doc) -> str:
     return "".join(parts)
 
 
+def _text_excluding_notes(doc) -> str:
+    """取正文文本但跳过文末「注释」节。
+
+    为什么：endnote 制式的刊，注释节会被版式脚本从文末挪到参考文献之前；
+    这是版式要求的顺序调整，不该被判成"正文被改动"。
+    """
+    body = doc.element.body
+    nodes = list(body)
+    start = None
+    for i, node in enumerate(nodes):
+        if node.tag != qn("w:p"):
+            continue
+        txt = "".join(t.text or "" for t in node.iter(qn("w:t"))).strip()
+        if txt in ("注释", "注　释"):
+            start = i
+            break
+    if start is None:
+        return _all_text(doc)
+    end = start + 1
+    while end < len(nodes):
+        node = nodes[end]
+        txt = "".join(t.text or "" for t in node.iter(qn("w:t"))).strip()
+        if node.tag == qn("w:tbl"):
+            break
+        if txt and not re.match(r"^(?:\d+[.．、]|[①②③④⑤⑥⑦⑧⑨⑩])", txt):
+            break
+        end += 1
+    parts = []
+    for i, node in enumerate(nodes):
+        if start <= i < end:
+            continue
+        parts.append("".join(t.text or "" for t in node.iter(qn("w:t"))))
+    return "".join(parts)
+
+
 def _norm(text: str) -> str:
     text = re.sub(r"\[\d+\]", "", text)          # 去掉 [1] 注号
     return re.sub(r"\s+", "", text)
@@ -222,6 +259,11 @@ def verify(docx_path: Path, journal: str, ref_path: Path | None = None,
         add("分栏", f"{want_cols} 栏", "各节栏数 " + ",".join(map(str, nums)), ok)
 
     # 2 段落分类与逐类格式
+    # 文末注释节单独校验（见第 6 节），不参与正文各类别的统计，否则 "1. …" 会被算成三级标题
+    note_elems = set()
+    if notes_mode(spec, journal) == "endnote":
+        _h, _items, _nodes = find_notes_block(doc)
+        note_elems = {id(n) for n in _nodes}
     buckets: dict[str, list] = {}
     nonempty = 0
     empty = 0
@@ -229,6 +271,8 @@ def verify(docx_path: Path, journal: str, ref_path: Path | None = None,
         text = par.text.strip()
         if not text:
             empty += 1
+            continue
+        if id(par._p) in note_elems:
             continue
         kind = classify(text, nonempty, par.style.name)
         nonempty += 1
@@ -387,29 +431,103 @@ def verify(docx_path: Path, journal: str, ref_path: Path | None = None,
         add("表题位置", "表题在表上方", f"{ok_cnt}/{len(tab_caps)} 符合",
             ok_cnt == len(tab_caps))
 
-    # 5 三线表：不应有竖线。四刊是否强制三线表未逐一确证，故默认只提示，
-    #   用 --strict-tables 才升级为不符合项。
-    bad_tables = 0
-    for table in doc.tables:
+    # 5 表格制式（例文实测，四刊各不相同，不能一刀切：
+    #   《政治学研究》《管理世界》是网格表，《公共管理学报》是三线表，
+    #   《中国行政管理》例文无表 → 未确认，跳过）
+    style = spec.get("table_style") or TABLE_STYLE.get(journal)
+
+    def has_vertical(table) -> bool:
         tblPr = table._tbl.tblPr
         borders = tblPr.find(qn("w:tblBorders")) if tblPr is not None else None
-        if borders is None:
-            continue
-        for edge in ("insideV", "left", "right"):
-            el = borders.find(qn("w:" + edge))
-            if el is not None and el.get(qn("w:val")) not in (None, "none", "nil"):
-                bad_tables += 1
-                break
-    if doc.tables:
-        add("三线表（无内竖线）", "无竖线", f"{len(doc.tables)-bad_tables}/{len(doc.tables)} 合规",
-            bad_tables == 0,
-            "" if not bad_tables else "（部分刊接受网格表；确认投稿要求后再定）",
-            warn_only=not strict_tables)
+        if borders is not None:
+            for edge in ("insideV", "left", "right"):
+                el = borders.find(qn("w:" + edge))
+                if el is not None and el.get(qn("w:val")) not in (None, "none", "nil"):
+                    return True
+        for cell in table.rows[0].cells if len(table.rows) else []:
+            tcPr = cell._tc.find(qn("w:tcPr"))
+            if tcPr is None:
+                continue
+            tcb = tcPr.find(qn("w:tcBorders"))
+            if tcb is None:
+                continue
+            for edge in ("left", "right"):
+                el = tcb.find(qn("w:" + edge))
+                if el is not None and el.get(qn("w:val")) not in (None, "none", "nil"):
+                    return True
+        return False
 
-    # 6 文本完整性
+    if doc.tables and style:
+        n_grid = sum(1 for t in doc.tables if has_vertical(t))
+        n_line = len(doc.tables) - n_grid
+        if style == "three-line":
+            add("表格制式", "三线表（无竖线）", f"{n_line}/{len(doc.tables)} 合规",
+                n_grid == 0, "" if n_grid == 0 else "（有竖线，属网格表）",
+                warn_only=not strict_tables)
+        elif style == "grid":
+            add("表格制式", "网格表（有竖线，同该刊例文）", f"{n_grid}/{len(doc.tables)} 合规",
+                n_grid == len(doc.tables), "",
+                warn_only=not strict_tables)
+
+    # 6 注释制式（例文实测：《管理世界》是文末「注释」节，其余三刊是页下注）
+    ns = spec.get("notes") or {}
+    if notes_mode(spec, journal) == "endnote":
+        head = None
+        for par in doc.paragraphs:
+            if par.text.strip() in ("注释", "注　释"):
+                head = par
+                break
+        add("注释节", "文末「注释」标题", "有" if head is not None else "缺",
+            head is not None)
+        if head is not None:
+            import re as _re
+            items = []
+            started = False
+            for par in doc.paragraphs:
+                if head is not None and par._p is head._p:
+                    started = True
+                    continue
+                if not started:
+                    continue
+                t = par.text.strip()
+                if not t:
+                    continue
+                if _re.match(r"^(参考文献|附录|[一二三四五六七八九十]+、)", t):
+                    break
+                if _re.match(r"^(?:\d+[.．、]|[①②③④⑤⑥⑦⑧⑨⑩])", t):
+                    items.append(par)
+            add("注释条数", "≥1", str(len(items)), bool(items))
+            if items and ns.get("size"):
+                sizes = []
+                for par in items:
+                    for run in par.runs:
+                        _e, s = _run_attr(run)
+                        if s:
+                            sizes.append(s)
+                            break
+                got, _n = _modal(sizes)
+                if got is not None:
+                    add("注释字号", f"{ns['size']}pt", f"{got}pt",
+                        abs(got - ns["size"]) <= TOL["size"])
+            # 顺序：注释应在参考文献之前
+            refs = next((p for p in doc.paragraphs if p.text.strip() == "参考文献"), None)
+            if refs is not None and head is not None:
+                order_ok = doc.element.body.index(head._p) < doc.element.body.index(refs._p)
+                add("注释节位置", "在参考文献之前", "之前" if order_ok else "之后", order_ok)
+        if _footnotes(docx_path) is not None:
+            res.setdefault("warnings", []).append("注释制式：该刊为文末注释，但文档仍含页下注部件")
+
+    # 7 文本完整性
     if ref_path:
-        ref_text = _norm(_all_text(Document(str(ref_path))))
-        got_text = _norm(_all_text(doc))
+        ref_doc = Document(str(ref_path))
+        if notes_mode(spec, journal) == "endnote":
+            # 文末注释节会被版式脚本挪到参考文献之前，"顺序变了"不等于"文字改了"，
+            # 所以两侧都先剔掉注释节再比。
+            ref_text = _norm(_text_excluding_notes(ref_doc))
+            got_text = _norm(_text_excluding_notes(doc))
+        else:
+            ref_text = _norm(_all_text(ref_doc))
+            got_text = _norm(_all_text(doc))
         if ref_text == got_text:
             add("文本完整性", "与底稿完全一致", "一致", True)
         else:

@@ -65,11 +65,15 @@ rfonts.set(qn("w:hAnsi"), "Times New Roman")
 要同时改 `wp:extent` 和 `a:xfrm/a:ext`，否则 Word 里显示尺寸与文档流尺寸不一致。
 EMU 换算：1 cm = 360000 EMU。
 
-### 表格变成网格表
-**症状**：三线表要求，但改出来每格都有框线。
-**原因**：`doc.add_table(style='Table Grid')`。
-**修法**：不要用 Table Grid 样式，改为设 `w:tblBorders`：顶/底 `single`，
-`insideH` / `insideV` / `left` / `right` 全 `none`，再给表头行加 `w:tcBorders/w:bottom`。
+### 表格制式搞反了：以为"中文期刊一律三线表"
+**症状**：把稿子的表格统一改成三线表，或统一改成网格表，结果与该刊例文不符。
+**实测**（数例文 PDF 里表体的竖线段）：
+《政治学研究》=带左右外框的网格表（4 竖线）；《管理世界》=横线贯通 + 列间竖线、
+无左右外框；《公共管理学报》=标准三线表（0 竖线）；《中国行政管理》例文无表（未确认）。
+**修法**：按刊配 `TABLE_STYLE`（`grid-full` / `grid` / `three-line` / `None`），
+不要用全局默认值，也不要把"多数期刊用三线表"当规则。
+技术上两种都能做：设 `w:tblBorders` 的 `insideH/insideV/left/right` 为 `single` 或 `none`，
+三线表再给表头行加 `w:tcBorders/w:bottom`。
 
 ### 页下注编号不是圈码
 **症状**：脚注显示 1,2,3 而不是 ①②③。
@@ -128,3 +132,12 @@ EMU 换算：1 cm = 360000 EMU。
 | 四号 | 14 | 小四 | 12 |
 | 五号 | 10.5 | 小五 | 9 |
 | 六号 | 7.5 | 小六 | 6.5 |
+
+### python-docx 存盘会重写多个部件，"只改了一处"的断言必然失败
+**症状**：只想改两个图题的先后顺序，改完做部件级差异断言，发现 `styles.xml`、
+`settings.xml`、`[Content_Types].xml`、各种 `rels` 全都变了。
+**原因**：`Document.save()` 会把整个 OPC 包重新序列化，即使内容等价，字节也不同。
+**修法**：凡是"只允许改某几个部件"的操作（换图、挪题注、改表格边框），
+不要用 python-docx 存盘，**直接对 zip 里的 `word/document.xml` 做 XML 手术**，
+其余部件逐字节照抄。这样部件断言才成立，也才敢在成品稿上动手。
+`embed_figure.py` 和按例文校正成品的脚本都是这么做的。

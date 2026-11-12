@@ -1,4 +1,4 @@
----
+﻿---
 name: journal-layout
 description: 把一篇中文论文（Markdown 或 docx 底稿）排版成国内政治学与公共管理四本顶刊（《政治学研究》《中国行政管理》《公共管理学报》《管理世界》）的投稿版式：页面与边距、标题层级、正文行距、页下注编号、三线表、图件与题注、双栏版式，并用结构断言校验而不是逐页出图。当用户说"排版""投稿版式""按某刊格式改""把论文排成期刊格式""改成参考文献格式/页下注格式""论文转Word"时使用。
 ---
@@ -86,7 +86,10 @@ $PY $S/md2docx.py --md 全文.md --out 03_历史稿与原稿/底稿.docx \
 ```
 
 - 支持 `# 题名` / `## 一级` / `### 二级` / `**图1 题**` / 管道表格 / `[^1]` 页下注
-- 页下注在**这一步**就变成真正的 Word footnote（`scripts/footnotes.py` 写 OOXML）
+- 注释在这**一步**定型：`--notes-mode footnote`（默认，页下注，用 `scripts/footnotes.py` 写 OOXML）
+  或 `--notes-mode endnote`（文末「注释」节）。**注释制式按刊定，不是按模式定**：
+  《管理世界》的投稿指南与已刊例文都要求文末注释，其余三刊是页下注。
+  用错了会被 `verify_layout.py` 的「注释节」一项拦住。
 - 表格默认输出三线表
 - 已有 docx 底稿可跳过本步，直接进第 4 步
 
@@ -141,7 +144,7 @@ $PY $S/embed_figure.py --docx 成品.docx --image 04_论文图件/图1.png --ind
 | 版式数值符合该刊 | `verify_layout.py --journal X --strict` | 必须 PASS |
 | 正文没被排版改动 | 同上 `--ref 底稿.docx` | 文本完整性 ✓ |
 | 只改了该改的部件 | `snapshot.py --diff 备份目录 --against 成品目录 --allow 允许前缀` | PASS |
-| 未确认项已向用户说明 | verify 输出的"未核对项" | 逐条交代，不隐瞒 |
+| 注释制式符合该刊 | verify 的"注释节/注释条数/注释节位置" | 页下注与文末注释不能混 |\n| 未确认项已向用户说明 | verify 输出的"未核对项" | 逐条交代，不隐瞒 |
 | 图与论证对应 | `references/figure-specs.md` 的核对表 | 每张图列"图中关系/正文依据/表达边界" |
 
 ## 常见偏差与修法
@@ -154,7 +157,7 @@ $PY $S/embed_figure.py --docx 成品.docx --image 04_论文图件/图1.png --ind
 | 页下注编号是 1,2,3 不是 ①②③ | `sectPr/w:footnotePr` 没设 `numFmt` | 设 `decimalEnclosedCircle`；重排设 `eachPage`/`continuous` |
 | 图题和现实出版物位置相反 | 沿用了别的刊/别的项目的习惯 | 实测例文后改 `SPECS[...]["figure"]["caption_position"]` |
 | 双栏版式把表/图挤进半栏 | 没给表和图单独开 1 栏区段 | `span_tables` / `span_figures` 会插区段边界 |
-| 表格有网格竖线 | 用了 `Table Grid` 样式 | 设 `tblBorders` 内框为 none，只留顶/底/表头线 |
+| 表格制式与期刊不符 | 以为"中文期刊一律三线表" | **先查例文**：四刊里《政治学研究》《管理世界》本身就是网格表，《公共管理学报》才是三线表；`TABLE_STYLE` 按刊配置，不要一刀切 |
 | 排版后页数暴涨 | 行距设成了倍数而非固定值 | 中文期刊多为固定行距（如 19pt），不是 1.5 倍 |
 
 ## 脚本一览

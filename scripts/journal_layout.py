@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+﻿#!/usr/bin/env python
 # -*- coding: utf-8 -*-
 """按中文社科期刊版式规格重排一篇 docx。
 
@@ -549,6 +549,162 @@ def style_footnotes(docx_path: Path, spec: dict) -> int:
     return count
 
 
+# 表格制式：**四刊各不相同，不能一刀切**。这是例文实测结论（PyMuPDF 读 PDF 矢量
+# 绘图对象数竖线），与投稿/刊出模式无关，属于刊物固有习惯：
+#   《政治学研究》带左右外框的完整网格表（4 条竖线）
+#   《管理世界》横线逐行贯通 + 列间竖线，但无左右外框
+#   《公共管理学报》标准三线表（0 竖线，顶线/表头线/底线粗细分明）
+#   《中国行政管理》该篇例文全文无表 → 未确认，保持原样
+TABLE_STYLE = {
+    "politics": "grid-full",
+    "management": "grid",
+    "china-admin": None,
+    "public-admin": "three-line",
+}
+
+BORDER_PLANS = {
+    # 边框名: 线宽（1/8 pt）；0 = 不要
+    "three-line": {"top": 12, "bottom": 12, "left": 0, "right": 0,
+                   "insideH": 0, "insideV": 0},
+    "grid": {"top": 12, "bottom": 12, "left": 0, "right": 0,
+             "insideH": 4, "insideV": 4},
+    "grid-full": {"top": 12, "bottom": 12, "left": 4, "right": 4,
+                  "insideH": 4, "insideV": 4},
+}
+
+
+def apply_table_style(doc, style: str | None) -> int:
+    """把文档里的表格改成该刊的表格制式。style 为 None 时不动。"""
+    if not style or style not in BORDER_PLANS:
+        return 0
+    plan = BORDER_PLANS[style]
+    n = 0
+    for table in doc.tables:
+        tblPr = table._tbl.tblPr
+        for old in tblPr.findall(qn("w:tblBorders")):
+            tblPr.remove(old)
+        borders = OxmlElement("w:tblBorders")
+        for edge, sz in plan.items():
+            el = OxmlElement("w:" + edge)
+            el.set(qn("w:val"), "single" if sz else "none")
+            el.set(qn("w:sz"), str(sz or 0))
+            el.set(qn("w:space"), "0")
+            el.set(qn("w:color"), "000000")
+            borders.append(el)
+        tblPr.append(borders)
+        # 三线表要单独给表头加一条下线（网格表的行线由 insideH 负责）
+        if style == "three-line" and len(table.rows):
+            for cell in table.rows[0].cells:
+                tcPr = cell._tc.get_or_add_tcPr()
+                for old in tcPr.findall(qn("w:tcBorders")):
+                    tcPr.remove(old)
+                tcb = OxmlElement("w:tcBorders")
+                bot = OxmlElement("w:bottom")
+                bot.set(qn("w:val"), "single")
+                bot.set(qn("w:sz"), "6")
+                bot.set(qn("w:space"), "0")
+                bot.set(qn("w:color"), "000000")
+                tcb.append(bot)
+                tcPr.append(tcb)
+        n += 1
+    return n
+
+
+# ---------------------------------------------------------------------------
+# 文末注释（endnote）节
+# ---------------------------------------------------------------------------
+RE_NOTE_HEAD = re.compile(r"^注\s*释$")
+RE_NOTE_ITEM = re.compile(r"^(?:\d+[.．、]|[①②③④⑤⑥⑦⑧⑨⑩])")
+RE_END_AFTER = re.compile(r"^(参考文献|附录|[一二三四五六七八九十]+、)")
+
+
+def find_notes_block(doc):
+    """定位文末「注释」节：返回 (标题段, [条目段], [节点])；没有则 (None, [], [])。"""
+    paras = doc.paragraphs
+    head = None
+    for i, par in enumerate(paras):
+        if RE_NOTE_HEAD.match(par.text.strip()) and par.style.name.startswith("Heading"):
+            head = i
+            break
+    if head is None:
+        return None, [], []
+    items = []
+    for par in paras[head + 1:]:
+        t = par.text.strip()
+        if not t:
+            continue
+        if RE_END_AFTER.match(t) or par.style.name.startswith("Heading"):
+            break
+        if RE_NOTE_ITEM.match(t):
+            items.append(par)
+        else:
+            break
+    nodes = [paras[head]._p] + [p._p for p in items]
+    return paras[head], items, nodes
+
+
+# 注释制式：与表格制式同理，属于**刊物固有习惯**，与投稿/刊出模式无关。
+# 例文实测：《管理世界》是文末「注释」节；其余三刊是页下注（中国行政管理是上标［n］
+# 接文后参考文献，本工具按页下注通道处理）。
+NOTES_STYLE = {
+    "politics": "footnote",
+    "management": "endnote",
+    "china-admin": "footnote",
+    "public-admin": "footnote",
+}
+
+
+def notes_mode(spec: dict, journal: str) -> str:
+    """该刊的注释制式：spec.notes.mode 优先，否则查 NOTES_STYLE。"""
+    return (spec.get("notes") or {}).get("mode") or NOTES_STYLE.get(journal) or "footnote"
+
+
+def style_endnotes(doc, spec: dict, journal: str) -> list[str]:
+    """按该刊要求给「注释」节上样式，并把该节移到「参考文献」之前。
+
+    为什么需要：中文社科期刊的注释节在参考文献**之前**，而 md2docx 的 endnote
+    通道只能尾追加。这里一次性把顺序和字号都摆正。
+    """
+    ns = spec.get("notes") or {}
+    if notes_mode(spec, journal) != "endnote":
+        return []
+    head, items, nodes = find_notes_block(doc)
+    if head is None:
+        return ["未找到「注释」节（该刊要求文末注释，底稿请用 md2docx --notes-mode endnote）"]
+    from docx.shared import Pt
+    notes = []
+    body = doc.element.body
+    # 1) 顺序：注释节移到「参考文献」之前
+    ref = None
+    for par in doc.paragraphs:
+        if par.text.strip() == "参考文献":
+            ref = par
+            break
+    if ref is not None and ref._p.getprevious() not in nodes:
+        first, last = nodes[0], nodes[-1]
+        if body.index(first) > body.index(ref._p):
+            anchor = ref._p
+            for node in nodes:
+                body.remove(node)
+                anchor.addprevious(node)
+            notes.append("注释节移到参考文献之前")
+    # 2) 条目样式：字号/行距/字体/缩进
+    for par in items:
+        pf = par.paragraph_format
+        if ns.get("line"):
+            pf.line_spacing = Pt(ns["line"])
+        pf.first_line_indent = Pt(0)
+        pf.space_before = Pt(0)
+        pf.space_after = Pt(0)
+        for run in par.runs:
+            if ns.get("east"):
+                _set_east(run, ns["east"])
+            if ns.get("size"):
+                run.font.size = Pt(_half_pt(ns["size"]))
+    notes.append(f"注释节 {len(items)} 条已按该刊样式（{ns.get('size')}pt / 行距 {ns.get('line')}pt）")
+    return notes
+
+
 # ---------------------------------------------------------------------------
 # 主流程
 # ---------------------------------------------------------------------------
@@ -570,19 +726,32 @@ def apply_spec(src: Path, dst: Path, journal: str, dry_run: bool = False,
         st.font.size = __import__("docx").shared.Pt(_half_pt(body["size"]))
         _set_east(st, body["east"])
 
+    # 文末注释节先归位，再参与下面的段落分类（否则 "1. …" 会被当成三级标题）
+    report["notes"] += style_endnotes(doc, spec, journal)
+    note_head, note_items, _ = find_notes_block(doc)
+    note_nodes = {id(p._p) for p in ([note_head] if note_head is not None else []) + note_items}
+
     nonempty = 0
     for idx, par in enumerate(doc.paragraphs):
         text = par.text.strip()
         if not text:
             continue
-        kind = classify(text, nonempty, par.style.name)
+        if id(par._p) in note_nodes:
+            kind = "note_head" if (note_head is not None and par._p is note_head._p) else "note_item"
+        else:
+            kind = classify(text, nonempty, par.style.name)
         nonempty += 1
         report["kinds"][kind] = report["kinds"].get(kind, 0) + 1
         if kind in ("abstract", "keywords"):
             _apply_rename(par, (spec.get("abstract") or {}).get("rename") or {})
+        if kind in ("note_head", "note_item"):
+            continue                      # 已在 style_endnotes 里处理，不套正文格式
         _apply_paragraph_format(par, spec, kind)
 
     report["tables"] = _format_tables(doc, spec)
+    tstyle = spec.get("table_style") or TABLE_STYLE.get(journal)
+    if tstyle:
+        report["table_style"] = f"{tstyle}（{apply_table_style(doc, tstyle)} 个表）"
     report["notes"] += _relocate_figures(doc, spec)
     report["notes"] += _set_columns(doc, spec)
 

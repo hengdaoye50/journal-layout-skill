@@ -11,12 +11,18 @@
     python md2docx.py --md 全文.md --out 底稿.docx --figure-dir 图件 --figure-width-cm 14.8
     python md2docx.py --md 全文.md --out 初稿.docx --no-footnotes     # 先看结构
     python md2docx.py --md 全文.md --out 底稿.docx --emit-notes notes.json
+    python md2docx.py --md 全文.md --out 底稿.docx --notes-mode endnote   # 文末「注释」节
+
+两条注释通道（默认仍是页下注，行为不变）：
+    --notes-mode footnote  页下注：正文 [n] → footnoteReference，注文进 word/footnotes.xml；
+    --notes-mode endnote   文末注：正文 [n] 原样保留，注文作为文档末尾「注释」节追加，
+                           不生成 footnotes.xml（《管理世界》的制式）。
 
 支持的 Markdown 子集（够写中文社科论文）：
     # 题名            ## 一级标题      ### 二级标题
     正文段落（首行缩进 2 字符，两端对齐）
     **粗体** *斜体*
-    | 表格 | 三线表 |        [^1] 行内注号      [^1]: 注释正文（收进页下注）
+    | 表格 | 三线表 |        [^1] 行内注号      [^1]: 注释正文（--notes-mode 决定进页下注还是文末注释）
     **图1 图题**        题注下一行自动插入 figure-dir 中的 图1*.png
     ## 参考文献          其下条目自动悬挂缩进
     --- 分隔线（忽略）  ```代码块（忽略）
@@ -109,7 +115,7 @@ def three_line_table(table) -> None:
 
 def build(md_path: Path, out_path: Path, figure_dir: Path | None,
           figure_width_cm: float, with_footnotes: bool,
-          fig_map: dict | None = None) -> dict:
+          fig_map: dict | None = None, notes_mode: str = "footnote") -> dict:
     raw = md_path.read_text(encoding="utf-8")
     lines = raw.splitlines()
 
@@ -281,30 +287,46 @@ def build(md_path: Path, out_path: Path, figure_dir: Path | None,
     stats["notes"] = len(notes)
 
     if with_footnotes and notes:
-        rep = footnotes.inject(out_path, notes, {"east": "宋体", "size": 10, "line": 15})
-        stats["notes_injected"] = rep["injected"]
-        if rep["missing"]:
-            stats["notes_missing"] = rep["missing"]
+        if notes_mode == "endnote":
+            rep = footnotes.add_endnotes(out_path, notes,
+                                         east="宋体", size=10, line=15)
+            stats["notes_endnote"] = rep["added"]
+        else:
+            rep = footnotes.inject(out_path, notes,
+                                   {"east": "宋体", "size": 10, "line": 15})
+            stats["notes_injected"] = rep["injected"]
+            if rep["missing"]:
+                stats["notes_missing"] = rep["missing"]
     return stats
 
 
 def main() -> int:
-    ap = argparse.ArgumentParser(description="Markdown → 语义化 Word 底稿（含页下注）")
+    ap = argparse.ArgumentParser(description="Markdown → 语义化 Word 底稿（含页下注/文末注释）")
     ap.add_argument("--md", required=True)
     ap.add_argument("--out", required=True)
     ap.add_argument("--figure-dir", help="图片目录，按 图1*.png / fig1*.png 匹配")
     ap.add_argument("--fig-map", help='显式映射 json：{"1": "路径/图1.png"}')
     ap.add_argument("--figure-width-cm", type=float, default=14.8)
-    ap.add_argument("--no-footnotes", action="store_true", help="不注入页下注，只留 [n] 标记")
+    ap.add_argument("--no-footnotes", action="store_true",
+                    help="不注入注释，只留 [n] 标记（优先于 --notes-mode）")
+    ap.add_argument("--notes-mode", choices=["footnote", "endnote"], default="footnote",
+                    help="footnote=页下注（默认，写 footnotes.xml）；"
+                         "endnote=文末「注释」节（正文 [n] 原样保留，不写 footnotes.xml）")
     ap.add_argument("--emit-notes", help="把解析到的注释另存为 json，便于核对")
     a = ap.parse_args()
     fig_map = json.loads(Path(a.fig_map).read_text(encoding="utf-8")) if a.fig_map else None
     md = Path(a.md)
     stats = build(md, Path(a.out), Path(a.figure_dir) if a.figure_dir else None,
-                  a.figure_width_cm, not a.no_footnotes, fig_map)
+                  a.figure_width_cm, not a.no_footnotes, fig_map, a.notes_mode)
     print(f"底稿已生成：{a.out}")
+    if a.no_footnotes:
+        note_desc = "按 --no-footnotes 只留 [n] 标记"
+    elif a.notes_mode == "endnote":
+        note_desc = f"文末 {stats.get('notes_endnote', 0)} 条"
+    else:
+        note_desc = f"注入 {stats.get('notes_injected', 0)}"
     print(f"  段落 {stats['paras']}  表格 {stats['tables']}  插图 {stats['figures']}  "
-          f"注释 {stats['notes']}（注入 {stats.get('notes_injected', 0)}）")
+          f"注释 {stats['notes']}（{note_desc}）")
     if stats.get("notes_missing"):
         print(f"  ! 注释定义缺失的编号：{stats['notes_missing']}")
     return 0

@@ -21,6 +21,11 @@
 4) 字体字段写字体族名（宋体 / 楷体 / 黑体），对应实测 PDF 内嵌的方正系字体；
    只有"族名不足以表达版式特征"的例外才写成字体本身（见 china-admin.title）。
 5) 每刊末尾的"最没把握"注释块，列的是建议 Lead 复核/人工拍板的字段，不是待办清单。
+6) 新增字段 notes（journal_layout.py 不读，供 md2docx.py --notes-mode 选通道）：
+   {"mode": "footnote"|"endnote", 可选 "east"/"size"/"line"}。
+   四刊里只有《管理世界》是文末「注释」节（例文实测），其余三刊是页下注；
+   management.notes.size/line 取 journal-specs.md §5.6 的〔实测〕7.84 pt / 11.0 pt，
+   注释正文字体族那份文档没给实测值，故不填 east。
 
 用法（不需要 import 本文件，journal_layout.py 会按 --mode 自动选表）：
     python journal_layout.py --list --mode published
@@ -64,6 +69,8 @@ PUBLISHED_SPECS: dict[str, dict] = {
         # 本刊最硬的一条：①②③ 每页重排，注文宋体 10.29 / 行距 19.0（三方一致）
         "footnote": {"num_fmt": "decimalEnclosedCircle", "num_restart": "eachPage",
                      "east": "宋体", "size": 10.29, "line": 19.0},
+        # 页下注通道（例文实测就是页下注，不是文末注）
+        "notes": {"mode": "footnote"},
         # 例文无图，图题位置/图宽均〔未确认〕
         "figure": {"caption_position": None, "width": None},
         "columns": 1,
@@ -109,6 +116,8 @@ PUBLISHED_SPECS: dict[str, dict] = {
         # 例文无页下注，该刊从未落地过编号与字体参数 → 全 None（不猜、不改、校验跳过）
         "footnote": {"num_fmt": None, "num_restart": None,
                      "east": None, "size": None, "line": None},
+        # 例文没有页下注（正文用上标 ［n］ 引文，注在文后参考文献）→ 仍归页下注通道
+        "notes": {"mode": "footnote"},
         "figure": {"caption_position": "below", "width": None},
         "columns": 2,
         # 实测栏距 22.7 pt（8.0 mm）。注意：apply 里该字段被**直接写进 w:cols/@w:space**，
@@ -156,6 +165,8 @@ PUBLISHED_SPECS: dict[str, dict] = {
         "table_cell": {"east": "楷体", "size": None, "line": None},
         "footnote": {"num_fmt": "decimalEnclosedCircle", "num_restart": "eachPage",
                      "east": "楷体", "size": 7.8, "line": 11.0},
+        # 页下注通道（例文实测就是页下注）
+        "notes": {"mode": "footnote"},
         "figure": {"caption_position": "below", "width": None},
         "columns": 2,
         "column_space": 446,        # 栏距实测 22.3 pt → w:cols/@w:space 用 twips：22.3×20
@@ -171,10 +182,13 @@ PUBLISHED_SPECS: dict[str, dict] = {
     # 《管理世界》：单栏（例文 PDF 实测；纸刊是否双栏〔未确认〕），正文 9.51 pt
     # 实测把握度：低—中（须知几乎不给版式，旧脚本值基本是《政治学研究》参数平移）
     # 最没把握的字段：
-    #   1) footnote —— 实测是**文末「注释」节**（①②③连续编号、7.84 pt、行距 11.0），
-    #      而脚本只有 Word 页下注通道，注的位置无法编码；注文字体又未实测，故字号/行距
-    #      一并留 None（数值记在这里：7.84 pt / 行距 11.0），只保留编号制式。要真仿该刊，
-    #      需另加"脚注转文末注释"的步骤；
+    #   1) notes —— 实测是**文末「注释」节**（①②③连续编号、7.84 pt、行距 11.0），
+    #      不是页下注。文末注释通道 2026-11-12 已由 footnotes.add_endnotes() 补上
+    #      （md2docx.py --notes-mode endnote），故 notes.mode=endnote，字号/行距取
+    #      §5.6〔实测〕填进 notes.size/line；注释正文字体族未实测 → 不填。
+    #      注意：add_endnotes 只做"追加段落节"，正文调用处的 ①②③ 上标仍由版式脚本负责，
+    #      且注释节会排在文档最末（若同时有「参考文献」节，真刊顺序是注释在前、参考文献在后，
+    #      需要时再补一个"插到参考文献之前"的选项——本表不做这个决定）；
     #   2) h2.first_indent —— 实测是"左缩进 14.5 pt"，而字段语义是首行缩进，不等价 → None；
     #   3) caption.align —— 实测"居中于图表本身，不是居中于版心"，Word 段落居中只能相对
     #      版心；只有图表通栏时两者才等价。
@@ -201,8 +215,11 @@ PUBLISHED_SPECS: dict[str, dict] = {
         "caption": {"east": "楷体", "size": 7.84, "align": "center",
                     "first_indent": None, "before": None, "after": None},
         "table_cell": {"east": "宋体", "size": 6.86, "line": 9.9},
+        # 编号制式实测：①②③ 连续编号（这是**文末注释**的编号，不是页下注；见 notes）
         "footnote": {"num_fmt": "decimalEnclosedCircle", "num_restart": "continuous",
                      "east": None, "size": None, "line": None},
+        # 本刊唯一走文末「注释」节的刊：正文 [n] 保留原样，注文追加成文档末尾的段落节
+        "notes": {"mode": "endnote", "size": 7.84, "line": 11.0},
         "figure": {"caption_position": "below", "width": None},
         "columns": 1,
     },
