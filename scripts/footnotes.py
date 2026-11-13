@@ -346,6 +346,48 @@ def _append_note_paragraph(doc, label: str, text: str, east: str | None,
     return p
 
 
+CIRCLED_NUMS = "①②③④⑤⑥⑦⑧⑨⑩⑪⑫⑬⑭⑮⑯⑰⑱⑲⑳㉑㉒㉓㉔㉕㉖㉗㉘㉙㉚㉛㉜㉝㉞㉟"  # 20 以上用扩展圈码
+
+
+def _circled(n: int) -> str:
+    return CIRCLED_NUMS[n - 1] if 1 <= n <= len(CIRCLED_NUMS) else "[%d]" % n
+
+
+def superscript_markers(docx_path: Path) -> int:
+    """把正文中文本为 "[n]" 的 run 改成上标圈码 ①…（文末注刊物的通行写法）。
+
+    只在 run 的文本恰好等于 "[数字]" 时替换，正文里偶然出现的方括号数字不会被误伤。
+    返回替换个数。
+    """
+    files = _read(docx_path)
+    doc = etree.fromstring(files["word/document.xml"])
+    changed = 0
+    for run in doc.iter(Q("r")):
+        texts = run.findall(Q("t"))
+        if len(texts) != 1:
+            continue
+        raw = (texts[0].text or "").strip()
+        m = re.fullmatch(r"\[(\d+)\]", raw)
+        if not m:
+            continue
+        n = int(m.group(1))
+        rpr = run.find(Q("rPr"))
+        if rpr is None:
+            rpr = etree.Element(Q("rPr"))
+            run.insert(0, rpr)
+        va = rpr.find(Q("vertAlign"))
+        if va is None:
+            va = etree.SubElement(rpr, Q("vertAlign"))
+        va.set(Q("val"), "superscript")
+        texts[0].text = _circled(n)
+        changed += 1
+    if changed:
+        files["word/document.xml"] = etree.tostring(
+            doc, xml_declaration=True, encoding="UTF-8", standalone=True)
+        _write(docx_path, files)
+    return changed
+
+
 def add_endnotes(docx_path: Path, notes: dict, east: str | None = None,
                  size: float | None = None, line: float | None = None,
                  num_fmt: str = "decimal") -> dict:
@@ -419,13 +461,16 @@ def add_endnotes(docx_path: Path, notes: dict, east: str | None = None,
         tmp.unlink(missing_ok=True)
         raise
 
+    # 正文里的 [n] 改成上标圈码 ①…（文末注刊物正文的通行写法，例文即如此）
+    n_sup = superscript_markers(docx_path)
     existing_heading = not heading_added
     print(f"文末注释已追加 {len(rendered)} 条"
           + ("（已有「注释」标题，未重复添加）" if existing_heading else "")
-          + ("，标题已新增" if heading_added else ""))
+          + ("，标题已新增" if heading_added else "")
+          + (f"；正文注号上标化 {n_sup} 处" if n_sup else ""))
     return {"added": len(rendered), "numbers": [x[0] for x in rendered],
             "heading_added": heading_added, "existing_heading": existing_heading,
-            "footnotes_untouched": True}
+            "footnotes_untouched": True, "superscripted": n_sup}
 
 
 def main() -> int:

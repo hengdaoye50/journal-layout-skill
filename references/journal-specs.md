@@ -624,7 +624,7 @@ import sys, os
 sys.stdout.reconfigure(encoding='utf-8')
 import fitz
 
-PDF = r'D:\CODEX\担责换权\02_投稿指南与例文\《政治学研究》投稿指南及例文\“结对创变”：一种重塑中国区域协调发展的新机制_康红军.pdf'
+PDF = r'02_投稿指南与例文/《政治学研究》投稿指南及例文/“结对创变”：一种重塑中国区域协调发展的新机制_康红军.pdf'  # 路径按你自己的材料目录调整
 doc = fitz.open(PDF)
 pg0 = doc[0]
 W, H = pg0.rect.width, pg0.rect.height
@@ -824,7 +824,7 @@ doc.close()
 import sys
 sys.stdout.reconfigure(encoding='utf-8')
 from docx import Document
-d = Document(r'D:\CODEX\担责换权\02_投稿指南与例文\《中国行政管理》投稿指南及例文\《中国行政管理》投稿须知.docx')
+d = Document(r'02_投稿指南与例文/《中国行政管理》投稿指南及例文/《中国行政管理》投稿须知.docx')  # 路径按你自己的材料目录调整
 for i, p in enumerate(d.paragraphs):
     if p.text.strip():
         print(i, p.text.strip())

@@ -190,6 +190,8 @@ def classify(text: str, index: int, style: str | None = None) -> str:
     if RE_REFERENCES.match(t):
         return "ref_head"
     s = (style or "").strip().lower()
+    if s == "byline":
+        return "byline"          # 署名/单位行，默认不改（四刊署名版式未实测）
     if s == "title":
         return "title"
     if s.startswith("heading 1"):
@@ -420,7 +422,7 @@ def _relocate_figures(doc, spec: dict) -> list[str]:
     return notes
 
 
-def _set_columns(doc, spec: dict) -> list[str]:
+def _set_columns(doc, spec: dict, journal: str = "") -> list[str]:
     """双栏版式：从指定一级标题起双栏，题名/摘要区通栏；表格/图各自成通栏区段。"""
     from copy import deepcopy
     cols = spec.get("columns")
@@ -446,7 +448,34 @@ def _set_columns(doc, spec: dict) -> list[str]:
         c.set(qn("w:space"), str(spec.get("column_space", 360)))
         return sec
 
+    def attach_before(node, n: int) -> bool:
+        """把 sectPr 挂到 node 之前那个段落的 pPr 上（不插入空段）。"""
+        prev = node.getprevious()
+        if prev is None or prev.tag != qn("w:p"):
+            return False
+        ppr = prev.find(qn("w:pPr"))
+        if ppr is None:
+            ppr = OxmlElement("w:pPr")
+            prev.insert(0, ppr)
+        if ppr.find(qn("w:sectPr")) is not None:
+            return False
+        ppr.append(make_sect(n))
+        return True
+
     def boundary(node, n: int, after=False):
+        # 优先"挂到相邻段落"，避免插入空段（LibreOffice 对空段边界会卡死）
+        if not after and attach_before(node, n):
+            return
+        if after:
+            nxt = node.getnext()
+            if nxt is not None and nxt.tag == qn("w:p"):
+                ppr = nxt.find(qn("w:pPr"))
+                if ppr is None:
+                    ppr = OxmlElement("w:pPr")
+                    nxt.insert(0, ppr)
+                if ppr.find(qn("w:sectPr")) is None:
+                    ppr.append(make_sect(n))
+                    return
         p = OxmlElement("w:p")
         ppr = OxmlElement("w:pPr")
         ppr.append(make_sect(n))
@@ -462,6 +491,13 @@ def _set_columns(doc, spec: dict) -> list[str]:
     if start is None:
         return [f"未找到双栏起点“{marker}”，跳过分栏"]
     boundary(start, 1)                       # 起点之前＝通栏
+    if spec.get("columns_new_page", COLUMNS_NEW_PAGE.get(journal, False)):
+        ppr = start.find(qn("w:pPr"))
+        if ppr is None:
+            ppr = OxmlElement("w:pPr")
+            start.insert(0, ppr)
+        if ppr.find(qn("w:pageBreakBefore")) is None:
+            etree.SubElement(ppr, qn("w:pageBreakBefore"))
     body.replace(body.sectPr, make_sect(cols))  # 其后正文＝双栏
     if spec.get("span_tables"):
         for node in list(body):
@@ -480,7 +516,26 @@ def _set_columns(doc, spec: dict) -> list[str]:
                     tail = nxt
                 boundary(node, cols)
                 boundary(tail, 1, after=True)
-    return [f"已分栏：正文 {cols} 栏，表格/图通栏"]
+
+    # 收尾边界：把多栏属性挂到最后一个尚未带 sectPr 的段落上，body 级 sectPr 回到 1 栏。
+    # 否则"文档最后一节是多栏"时，LibreOffice 在起始页只铺第一栏（实测踩到）。
+    tail_p = None
+    for node in reversed(list(body)):
+        if node.tag != qn("w:p"):
+            continue
+        ppr = node.find(qn("w:pPr"))
+        if ppr is not None and ppr.find(qn("w:sectPr")) is not None:
+            continue
+        tail_p = node
+        break
+    if tail_p is not None:
+        ppr = tail_p.find(qn("w:pPr"))
+        if ppr is None:
+            ppr = OxmlElement("w:pPr")
+            tail_p.insert(0, ppr)
+        ppr.append(make_sect(cols))
+        body.replace(body.sectPr, make_sect(1))
+    return [f"已分栏：正文 {cols} 栏，表格/图通栏（已加收尾边界）"]
 
 
 # ---------------------------------------------------------------------------
@@ -555,6 +610,10 @@ def style_footnotes(docx_path: Path, spec: dict) -> int:
 #   《管理世界》横线逐行贯通 + 列间竖线，但无左右外框
 #   《公共管理学报》标准三线表（0 竖线，顶线/表头线/底线粗细分明）
 #   《中国行政管理》该篇例文全文无表 → 未确认，保持原样
+# 双栏区段是否另起新页。None/缺省＝从页中开始（更贴近例文），
+# True＝另起新页（LibreOffice 在"页中分栏 + 大量页下注"时会死循环，需此开关兜底）。
+COLUMNS_NEW_PAGE = {"china-admin": True}
+
 TABLE_STYLE = {
     "politics": "grid-full",
     "management": "grid",
@@ -746,6 +805,8 @@ def apply_spec(src: Path, dst: Path, journal: str, dry_run: bool = False,
             _apply_rename(par, (spec.get("abstract") or {}).get("rename") or {})
         if kind in ("note_head", "note_item"):
             continue                      # 已在 style_endnotes 里处理，不套正文格式
+        if kind == "byline" and not spec.get("byline"):
+            continue                      # 该刊署名版式未确认 → 保持中立的居中楷体
         _apply_paragraph_format(par, spec, kind)
 
     report["tables"] = _format_tables(doc, spec)
@@ -753,7 +814,7 @@ def apply_spec(src: Path, dst: Path, journal: str, dry_run: bool = False,
     if tstyle:
         report["table_style"] = f"{tstyle}（{apply_table_style(doc, tstyle)} 个表）"
     report["notes"] += _relocate_figures(doc, spec)
-    report["notes"] += _set_columns(doc, spec)
+    report["notes"] += _set_columns(doc, spec, journal)
 
     if dry_run:
         report["dry_run"] = True

@@ -49,6 +49,28 @@ from docx.shared import Pt, Cm, RGBColor
 sys.path.insert(0, str(Path(__file__).parent))
 import footnotes  # noqa: E402  同目录的页下注模块
 
+BYLINE_STYLE = "Byline"     # 署名行专用段落样式，套版时按 byline 处理
+
+
+def add_byline(doc, byline, affil):
+    """写署名/单位行。必须在题名段落之后调用，否则会跑到标题上面。"""
+    if not byline:
+        return
+    par = doc.add_paragraph(style=BYLINE_STYLE)
+    par.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    par.paragraph_format.first_line_indent = Pt(0)
+    run = par.add_run(byline)
+    run.font.size = Pt(12)
+    set_east(run, "楷体")
+    if affil:
+        p2 = doc.add_paragraph(style=BYLINE_STYLE)
+        p2.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        p2.paragraph_format.first_line_indent = Pt(0)
+        r2 = p2.add_run(affil)
+        r2.font.size = Pt(9)
+        set_east(r2, "宋体")
+
+
 MD_INLINE = re.compile(r"(\*\*[^*]+\*\*|\*[^*]+\*|\[\^\d+\])")
 RE_FN_DEF = re.compile(r"^\[\^(\d+)\]:\s*(.+)$")
 RE_CAPTION = re.compile(r"^\*\*(图|表)\s*(\d+)")
@@ -115,7 +137,8 @@ def three_line_table(table) -> None:
 
 def build(md_path: Path, out_path: Path, figure_dir: Path | None,
           figure_width_cm: float, with_footnotes: bool,
-          fig_map: dict | None = None, notes_mode: str = "footnote") -> dict:
+          fig_map: dict | None = None, notes_mode: str = "footnote",
+          byline: str | None = None, affil: str | None = None) -> dict:
     raw = md_path.read_text(encoding="utf-8")
     lines = raw.splitlines()
 
@@ -140,7 +163,8 @@ def build(md_path: Path, out_path: Path, figure_dir: Path | None,
         rpr.insert(0, rf)
     rf.set(qn("w:eastAsia"), "宋体")
 
-    for name, size in (("Title", 18), ("Heading 1", 14), ("Heading 2", 12)):
+    for name, size in (("Title", 18), ("Heading 1", 14), ("Heading 2", 12),
+                        ("Heading 3", 12)):
         st = doc.styles[name]
         st.font.name = "Times New Roman"
         st.font.size = Pt(size)
@@ -160,6 +184,24 @@ def build(md_path: Path, out_path: Path, figure_dir: Path | None,
         if border is not None:
             ppr.remove(border)
 
+    # 署名行：中文期刊的题名下方通常有作者名（可带单位）。四刊的署名版式未逐一实测，
+    # 这里给一个中立的居中楷体样式；journal_layout 会把它当作 byline 类别、默认不覆盖。
+    from docx.enum.style import WD_STYLE_TYPE
+    try:
+        doc.styles[BYLINE_STYLE]
+    except KeyError:
+        by = doc.styles.add_style(BYLINE_STYLE, WD_STYLE_TYPE.PARAGRAPH)
+        by.base_style = doc.styles["Normal"]
+        by.font.name = "Times New Roman"
+        by.font.size = Pt(12)
+        by.paragraph_format.first_line_indent = Pt(0)
+        by.paragraph_format.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        rp = by.element.get_or_add_rPr()
+        rf = rp.find(qn("w:rFonts"))
+        if rf is None:
+            rf = OxmlElement("w:rFonts")
+            rp.insert(0, rf)
+        rf.set(qn("w:eastAsia"), "楷体")
     notes: dict[str, str] = {}
     stats = {"paras": 0, "tables": 0, "figures": 0, "notes": 0, "skipped": 0}
     in_refs = False
@@ -257,6 +299,7 @@ def build(md_path: Path, out_path: Path, figure_dir: Path | None,
             par.alignment = WD_ALIGN_PARAGRAPH.CENTER
             add_rich(par, line[2:])
             stats["paras"] += 1
+            add_byline(doc, byline, affil)      # 署名紧跟在题名之后
             continue
 
         if line.startswith("## "):
@@ -268,6 +311,11 @@ def build(md_path: Path, out_path: Path, figure_dir: Path | None,
             stats["paras"] += 1
             continue
 
+        if line.startswith("#### "):
+            par = doc.add_paragraph(style="Heading 3")
+            add_rich(par, line[5:].strip())
+            stats["paras"] += 1
+            continue
         if line.startswith("### "):
             par = doc.add_paragraph(style="Heading 2")
             add_rich(par, line[4:].strip())
@@ -313,11 +361,14 @@ def main() -> int:
                     help="footnote=页下注（默认，写 footnotes.xml）；"
                          "endnote=文末「注释」节（正文 [n] 原样保留，不写 footnotes.xml）")
     ap.add_argument("--emit-notes", help="把解析到的注释另存为 json，便于核对")
+    ap.add_argument("--byline", help="署名行文字，如 周黎安")
+    ap.add_argument("--affil", help="单位行文字（可选，排在署名下方）")
     a = ap.parse_args()
     fig_map = json.loads(Path(a.fig_map).read_text(encoding="utf-8")) if a.fig_map else None
     md = Path(a.md)
     stats = build(md, Path(a.out), Path(a.figure_dir) if a.figure_dir else None,
-                  a.figure_width_cm, not a.no_footnotes, fig_map, a.notes_mode)
+                  a.figure_width_cm, not a.no_footnotes, fig_map, a.notes_mode,
+                  a.byline, a.affil)
     print(f"底稿已生成：{a.out}")
     if a.no_footnotes:
         note_desc = "按 --no-footnotes 只留 [n] 标记"

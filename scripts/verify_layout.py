@@ -199,6 +199,17 @@ def _text_excluding_notes(doc) -> str:
     return "".join(parts)
 
 
+def _norm_labels(text: str) -> str:
+    """把摘要/关键词的标签写法归一化（各刊对这两个标签的格式要求不同）。
+
+    归一化只抹掉标签本身的括号、空格与冒号差异，标签后的正文一个字都不动，
+    因此仍能抓到真正的文字改动。
+    """
+    text = re.sub(r"[［\[]?\s*(?:摘\s*要|内容提要)\s*[］\]]?\s*[：:]?", "摘要", text)
+    text = re.sub(r"[［\[]?\s*关\s*键\s*词\s*[］\]]?\s*[：:]?", "关键词", text)
+    return text
+
+
 def _norm(text: str) -> str:
     text = re.sub(r"\[\d+\]", "", text)          # 去掉 [1] 注号
     return re.sub(r"\s+", "", text)
@@ -284,6 +295,7 @@ def verify(docx_path: Path, journal: str, ref_path: Path | None = None,
 
     for kind, spec_key in (("title", "title"), ("body", "body"), ("h1", "h1"),
                            ("h2", "h2"), ("h3", "h3"), ("caption", "caption")):
+        # byline（署名行）不在校验范围内：四刊署名版式未实测，不拿它判对错
         rows = buckets.get(kind) or []
         st = spec.get(spec_key) or {}
         if not rows:
@@ -523,11 +535,11 @@ def verify(docx_path: Path, journal: str, ref_path: Path | None = None,
         if notes_mode(spec, journal) == "endnote":
             # 文末注释节会被版式脚本挪到参考文献之前，"顺序变了"不等于"文字改了"，
             # 所以两侧都先剔掉注释节再比。
-            ref_text = _norm(_text_excluding_notes(ref_doc))
-            got_text = _norm(_text_excluding_notes(doc))
+            ref_text = _norm(_norm_labels(_text_excluding_notes(ref_doc)))
+            got_text = _norm(_norm_labels(_text_excluding_notes(doc)))
         else:
-            ref_text = _norm(_all_text(ref_doc))
-            got_text = _norm(_all_text(doc))
+            ref_text = _norm(_norm_labels(_all_text(ref_doc)))
+            got_text = _norm(_norm_labels(_all_text(doc)))
         if ref_text == got_text:
             add("文本完整性", "与底稿完全一致", "一致", True)
         else:

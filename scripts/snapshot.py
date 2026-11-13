@@ -9,9 +9,9 @@
 
 用法：
     # 改之前留档
-    python snapshot.py --backup "担责换权_版式已调整/*.docx" --label 机制图重构
+    python snapshot.py --backup "01_四刊最终稿/*.docx" --label 版式调整
     # 改之后比对（before 是留档，after 是当前）
-    python snapshot.py --diff 03_历史稿与原稿/2026-11-07_机制图重构前 --against 担责换权_版式已调整
+    python snapshot.py --diff 03_历史稿与原稿/2026-01-01_改动前 --against 01_四刊最终稿
     # 只允许 document.xml 与 media 变化
     python snapshot.py --diff ... --allow word/document.xml word/media/
 """
@@ -88,7 +88,7 @@ def diff(before_dir: Path, after_dir: Path, allow: list[str]) -> int:
 def main() -> int:
     ap = argparse.ArgumentParser(description="成品留档与 docx 部件级差异断言")
     ap.add_argument("--backup", nargs="+", metavar="GLOB", help="要留档的文件通配")
-    ap.add_argument("--label", default="改动", help="阶段名，如 机制图重构")
+    ap.add_argument("--label", default="改动", help="阶段名，如 版式调整")
     ap.add_argument("--archive", default=DEFAULT_ARCHIVE)
     ap.add_argument("--diff", metavar="BEFORE_DIR")
     ap.add_argument("--against", default=".", metavar="AFTER_DIR")
