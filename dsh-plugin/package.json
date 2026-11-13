@@ -1,0 +1,27 @@
+{
+  "name": "@local/journal-layout-skill",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Ship the journal-layout skill (中文期刊投稿版式排版) into the Harness skill catalog, with its Python scripts and reference docs as readable resources.",
+  "type": "module",
+  "main": "lib/index.js",
+  "exports": {
+    ".": "./lib/index.js",
+    "./locale/*.json": "./locale/*.json",
+    "./icon": "./icon.svg",
+    "./package.json": "./package.json"
+  },
+  "icon": "./icon.svg",
+  "files": [
+    "lib/index.js",
+    "cordis.patch.yml",
+    "locale/*.json",
+    "icon.svg"
+  ],
+  "license": "MIT",
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  }
+}

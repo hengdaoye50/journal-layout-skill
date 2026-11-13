@@ -1,4 +1,4 @@
-﻿#!/usr/bin/env python
+#!/usr/bin/env python
 # -*- coding: utf-8 -*-
 """版式结构校验：直接读 docx 的 XML 断言版式参数，不渲染页面。
 

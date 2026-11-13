@@ -36,24 +36,58 @@ Markdown 原稿  →  语义化底稿  →  套用期刊版式  →  结构断�
 
 ## 安装
 
-把整个目录放进 skill 目录：
+先拿到仓库：
 
 ```bash
-# Claude Code / 兼容 skills 的 Agent
-cp -r journal-layout ~/.claude/skills/
-
-# 或者 DSH
-cp -r journal-layout ~/.dsh/skills/
+git clone https://github.com/hengdaoye50/journal-layout-skill.git
 ```
 
-依赖：
+然后按你的宿主选一种装法。
+
+### 方式一：当技能目录用（Claude Code / Codex / 其他扫描 skills 的 Agent）
 
 ```bash
-pip install python-docx lxml Pillow          # 核心
+cp -r journal-layout-skill ~/.claude/skills/journal-layout    # Claude Code
+cp -r journal-layout-skill ~/.codex/skills/journal-layout     # Codex
+cp -r journal-layout-skill ~/.agents/skills/journal-layout    # 通用 agent 配置目录
+```
+
+目录名就是技能名（`journal-layout`），里面必须直接有 `SKILL.md`。
+
+### 方式二：当 DSH 插件装（DeepSeek Harness 用户推荐）
+
+仓库自带 [`dsh-plugin/`](dsh-plugin/)，是一个零依赖的 Host 插件：注册一个 bundled
+skill provider，把仓库根的 `SKILL.md` 与 `scripts/`、`references/` 交给 Harness 的技能注册表。
+
+```bash
+dsh plugin install /绝对路径/journal-layout-skill/dsh-plugin
+```
+
+或者在 DSH 会话里让 Agent 调用 `plugin_manager` 的 `install_bundle`，`target`
+填上面那个绝对路径。
+
+装完新会话的技能目录里会出现 `journal-layout`，插件页显示 **"期刊版式排版技能"**；
+卸载用 `remove_bundle`。注意：本地目录安装链接的是检出目录，**别移动或删除仓库位置**，
+换位置要重新装。详见 [`dsh-plugin/README.md`](dsh-plugin/README.md)。
+
+### 方式三：手动放
+
+把 `SKILL.md` + `scripts/` + `references/` 拷到任一被宿主扫描的技能根目录即可
+（DSH 的 user root 是 `~/.dsh/skills`，project root 是 `<项目>/.dsh/skills`）。
+
+### 依赖
+
+```bash
+pip install python-docx lxml Pillow          # 核心：底稿生成、套版、校验、绘图
 pip install pymupdf                          # 可选：抽页预览、测量例文 PDF
 ```
 
-LibreOffice 仅在 `render_preview.py`（抽页预览）时需要。
+LibreOffice 仅在 `render_preview.py`（抽页预览）时需要，且必须带
+`-env:UserInstallation=` 指向可写目录（脚本已处理）。
+
+> 小坑：如果你手动改过 `SKILL.md`，别用 Windows PowerShell 5.1 的
+> `Set-Content -Encoding UTF8` 保存——它会写 UTF-8 BOM，而 BOM 会让
+> frontmatter 解析失败，宿主会把整个技能判为"无效"直接跳过。用无 BOM 的 UTF-8。
 
 ## 快速开始
 
@@ -105,6 +139,10 @@ journal-layout/
 │   ├── workflow.md              工程纪律：目录约定、底稿策略、验收分层、交付清单
 │   ├── figure-specs.md          图件规范：通栏宽、灰度、字号、论证核对表
 │   └── pitfalls.md              踩坑记录：LibreOffice、中文路径、OOXML 细节
+├── dsh-plugin/                  DSH 插件：把本技能挂进 Harness 技能目录（零依赖）
+│   ├── package.json             声明 dsh.bundle.patch
+│   ├── cordis.patch.yml         插入 journal-layout-skill 这一行
+│   └── lib/index.js             ctx.skills.registerProvider() 注册 bundled 技能
 └── examples/
     ├── figure1_demo.py          机制图示例（产出 examples/out/）
     ├── endnote_demo.py          文末注释通道示例

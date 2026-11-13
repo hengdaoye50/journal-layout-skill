@@ -1,0 +1,4 @@
+- insert:
+    - id: journal-layout-skill
+      name: '@local/journal-layout-skill'
+      config: {}
